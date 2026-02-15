@@ -1,0 +1,41 @@
+# Python cache/artifacts
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Build/distribution
+build/
+dist/
+*.egg-info/
+.eggs/
+pip-wheel-metadata/
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Test/tool cache
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local temp outputs (renders, blend files, experiments)
+tmp/
+
+# IDE/editor
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+desktop.ini
+
+TODO.md
