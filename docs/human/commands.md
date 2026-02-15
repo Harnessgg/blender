@@ -10,6 +10,7 @@ harness-blender bridge serve [--host 127.0.0.1] [--port 41749]
 harness-blender bridge status
 harness-blender bridge stop
 harness-blender bridge verify [--iterations 25] [--max-failures 0]
+harness-blender bridge run-python <script.py> [--project <project.blend>] [--params-json <json>] [--timeout-seconds <int>]
 ```
 
 ## System
@@ -18,6 +19,20 @@ harness-blender bridge verify [--iterations 25] [--max-failures 0]
 harness-blender actions
 harness-blender doctor [--include-render/--no-include-render]
 harness-blender version
+harness-blender run-plan <plan.json> [--rollback-on-fail/--no-rollback-on-fail] [--dry-run]
+```
+
+`run-plan` schema example:
+
+```json
+{
+  "project": "tmp/example.blend",
+  "variables": { "cube": "MyCube" },
+  "steps": [
+    { "method": "project.new", "params": { "output": "${project}", "overwrite": true } },
+    { "method": "scene.object.add", "params": { "project": "${project}", "primitive": "CUBE", "name": "${cube}", "output": "${project}" } }
+  ]
+}
 ```
 
 ## File
@@ -48,6 +63,16 @@ harness-blender object apply-transform <project.blend> <object_name> [--apply-lo
 harness-blender object origin-set <project.blend> <object_name> [--origin-type ORIGIN_GEOMETRY|ORIGIN_CURSOR|ORIGIN_CENTER_OF_MASS|ORIGIN_CENTER_OF_VOLUME] [--output <path>]
 harness-blender object shade-smooth <project.blend> <object_name> [--output <path>]
 harness-blender object shade-flat <project.blend> <object_name> [--output <path>]
+harness-blender object transform-many <project.blend> <object_name...> [--location-json <json>] [--rotation-json <json>] [--scale-json <json>] [--output <path>]
+harness-blender object boolean-union <project.blend> <target_object> <with_object> [--apply/--no-apply] [--delete-with/--keep-with] [--output <path>]
+harness-blender object boolean-difference <project.blend> <target_object> <with_object> [--apply/--no-apply] [--delete-with/--keep-with] [--output <path>]
+harness-blender object boolean-intersect <project.blend> <target_object> <with_object> [--apply/--no-apply] [--delete-with/--keep-with] [--output <path>]
+harness-blender object join <project.blend> <object_name...> [--output <path>]
+harness-blender object convert-mesh <project.blend> <object_name> [--output <path>]
+harness-blender object shrinkwrap <project.blend> <object_name> <target_object> [--wrap-method <method>] [--offset <float>] [--apply/--no-apply] [--output <path>]
+harness-blender object data-transfer <project.blend> <object_name> <target_object> [--data-domain LOOP|VERTEX|EDGE|POLY] [--data-type <type>] [--apply/--no-apply] [--output <path>]
+harness-blender object group-create <project.blend> <group_name> <object_name...> [--location-json <json>] [--output <path>]
+harness-blender object parent-many <project.blend> <parent_name> <child_name...> [--output <path>]
 ```
 
 ## Camera
@@ -58,6 +83,8 @@ harness-blender camera set-active <project.blend> <camera_name> [--output <path>
 harness-blender camera list <project.blend>
 harness-blender camera set-lens <project.blend> <camera_name> <lens_mm> [--output <path>]
 harness-blender camera set-dof <project.blend> <camera_name> [--use-dof/--no-use-dof] [--focus-distance <float>] [--aperture-fstop <float>] [--focus-object <name>] [--output <path>]
+harness-blender camera look-at <project.blend> <camera_name> [--target-object <name>] [--target-location-json <json>] [--output <path>]
+harness-blender camera rig-product-shot <project.blend> <target_object> [--camera-name <name>] [--distance <float>] [--height <float>] [--lens <float>] [--output <path>]
 ```
 
 ## Light
@@ -67,6 +94,7 @@ harness-blender light add <project.blend> <POINT|SUN|SPOT|AREA> [--name <name>] 
 harness-blender light list <project.blend>
 harness-blender light set-energy <project.blend> <light_name> <energy> [--output <path>]
 harness-blender light set-color <project.blend> <light_name> <hex> [--output <path>]
+harness-blender light rig-three-point <project.blend> [--target-object <name>] [--output <path>]
 ```
 
 ## Material
@@ -75,9 +103,11 @@ harness-blender light set-color <project.blend> <light_name> <hex> [--output <pa
 harness-blender material list <project.blend>
 harness-blender material create <project.blend> <name> [--base-color <hex>] [--metallic <float>] [--roughness <float>] [--output <path>]
 harness-blender material assign <project.blend> <object_name> <material_name> [--output <path>]
+harness-blender material assign-many <project.blend> <material_name> <object_name...> [--output <path>]
 harness-blender material set-base-color <project.blend> <material_name> <hex> [--output <path>]
 harness-blender material set-metallic <project.blend> <material_name> <float> [--output <path>]
 harness-blender material set-roughness <project.blend> <material_name> <float> [--output <path>]
+harness-blender material set-node-input <project.blend> <material_name> <node_name> <input_name> <value_json> [--output <path>]
 ```
 
 ## Modifier
@@ -87,8 +117,58 @@ harness-blender modifier list <project.blend> <object_name>
 harness-blender modifier add <project.blend> <object_name> <modifier_type> [--modifier-name <name>] [--output <path>]
 harness-blender modifier remove <project.blend> <object_name> <modifier_name> [--output <path>]
 harness-blender modifier apply <project.blend> <object_name> <modifier_name> [--output <path>]
+harness-blender modifier set <project.blend> <object_name> <modifier_name> <property_name> <value_json> [--output <path>]
 harness-blender geometry-nodes attach <project.blend> <object_name> [--modifier-name <name>] [--output <path>]
 harness-blender geometry-nodes set-input <project.blend> <object_name> <input_name> <value_json> [--modifier-name <name>] [--output <path>]
+```
+
+## Mesh
+
+```bash
+harness-blender mesh smooth <project.blend> <object_name> [--iterations <int>] [--factor <float>] [--output <path>]
+harness-blender mesh subdivide <project.blend> <object_name> [--cuts <int>] [--output <path>]
+harness-blender mesh select-verts <project.blend> <object_name> <indices_json> [--replace/--add] [--output <path>]
+harness-blender mesh clear-selection <project.blend> <object_name> [--output <path>]
+harness-blender mesh transform-selected <project.blend> <object_name> [--location-json <json>] [--rotation-json <json>] [--scale-json <json>] [--output <path>]
+harness-blender mesh proportional-edit <project.blend> <object_name> [--location-json <json>] [--scale-json <json>] [--falloff <mode>] [--radius <float>] [--output <path>]
+harness-blender mesh extrude-region <project.blend> <object_name> [--offset-json <json>] [--output <path>]
+harness-blender mesh bevel-verts <project.blend> <object_name> [--amount <float>] [--segments <int>] [--output <path>]
+harness-blender mesh merge-by-distance <project.blend> <object_name> [--distance <float>] [--output <path>]
+harness-blender mesh loop-cut <project.blend> <object_name> <edge_indices_json> [--cuts <int>] [--output <path>]
+harness-blender mesh slide-loop <project.blend> <object_name> <edge_indices_json> [--factor <float>] [--output <path>]
+harness-blender mesh bisect <project.blend> <object_name> [--plane-co-json <json>] [--plane-no-json <json>] [--clear-inner/--keep-inner] [--clear-outer/--keep-outer] [--use-fill/--no-fill] [--output <path>]
+harness-blender mesh clean <project.blend> <object_name> [--merge-distance <float>] [--dissolve-angle <float>] [--output <path>]
+```
+
+## Lattice
+
+```bash
+harness-blender lattice add <project.blend> [--name Lattice] [--location-json <json>] [--scale-json <json>] [--points-u <int>] [--points-v <int>] [--points-w <int>] [--output <path>]
+harness-blender lattice bind <project.blend> <object_name> <lattice_name> [--modifier-name Lattice] [--output <path>]
+harness-blender lattice set-point <project.blend> <lattice_name> <u> <v> <w> [--location-json <json>] [--delta/--absolute] [--output <path>]
+```
+
+## Curve
+
+```bash
+harness-blender curve add-bezier <project.blend> <points_json> [--name BezierCurve] [--output <path>]
+harness-blender curve set-handle <project.blend> <curve_name> <point_index> <handle_location_json> [--handle left|right] [--handle-type <type>] [--output <path>]
+harness-blender curve to-mesh <project.blend> <curve_name> [--output <path>]
+```
+
+## Scene Utilities
+
+```bash
+harness-blender scene add-reference-image <project.blend> <image_path> [--name <name>] [--location-json <json>] [--scale-json <json>] [--output <path>]
+harness-blender scene set-orthographic <project.blend> <camera_name> [--ortho-scale <float>] [--output <path>]
+harness-blender scene set-world-background <project.blend> [--color <hex>] [--strength <float>] [--output <path>]
+harness-blender scene set-color-management <project.blend> [--view-transform <name>] [--look <name>] [--exposure <float>] [--gamma <float>] [--output <path>]
+```
+
+## Analyze
+
+```bash
+harness-blender analyze silhouette-diff <project.blend> <source_image> <reference_image> [--threshold <float>]
 ```
 
 ## Timeline/Animation

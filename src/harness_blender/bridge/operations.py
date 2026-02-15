@@ -42,25 +42,65 @@ ACTION_METHODS = [
     "scene.object.origin_set",
     "scene.object.shade_smooth",
     "scene.object.shade_flat",
+    "scene.object.transform_many",
+    "scene.object.boolean_union",
+    "scene.object.boolean_difference",
+    "scene.object.boolean_intersect",
+    "scene.object.join",
+    "scene.object.convert_mesh",
+    "scene.object.shrinkwrap",
+    "scene.object.data_transfer",
+    "scene.object.group_create",
+    "scene.object.parent_many",
     "scene.camera.list",
     "scene.camera.add",
     "scene.camera.set_active",
     "scene.camera.set_lens",
     "scene.camera.set_dof",
+    "scene.camera.look_at",
+    "scene.camera.rig_product_shot",
     "scene.light.add",
     "scene.light.list",
     "scene.light.set_energy",
     "scene.light.set_color",
+    "scene.light.rig_three_point",
     "scene.material.list",
     "scene.material.create",
     "scene.material.assign",
+    "scene.material.assign_many",
     "scene.material.set_base_color",
     "scene.material.set_metallic",
     "scene.material.set_roughness",
+    "scene.material.set_node_input",
     "scene.modifier.list",
     "scene.modifier.add",
     "scene.modifier.remove",
     "scene.modifier.apply",
+    "scene.modifier.set",
+    "scene.mesh.smooth",
+    "scene.mesh.subdivide",
+    "scene.mesh.select_verts",
+    "scene.mesh.clear_selection",
+    "scene.mesh.transform_selected",
+    "scene.mesh.proportional_edit",
+    "scene.mesh.extrude_region",
+    "scene.mesh.bevel_verts",
+    "scene.mesh.merge_by_distance",
+    "scene.mesh.loop_cut",
+    "scene.mesh.slide_loop",
+    "scene.mesh.bisect",
+    "scene.mesh.clean",
+    "scene.lattice.add",
+    "scene.lattice.bind",
+    "scene.lattice.set_point",
+    "scene.curve.add_bezier",
+    "scene.curve.set_handle",
+    "scene.curve.to_mesh",
+    "scene.add_reference_image",
+    "scene.set_orthographic",
+    "scene.world.set_background",
+    "scene.color_management.set",
+    "analyze.silhouette_diff",
     "scene.geometry_nodes.attach",
     "scene.geometry_nodes.set_input",
     "scene.timeline.set_frame_range",
@@ -89,6 +129,7 @@ ACTION_METHODS = [
     "render.animation",
     "render.status",
     "render.cancel",
+    "bridge.run_python",
 ]
 
 RENDER_JOBS: Dict[str, Dict[str, Any]] = {}
@@ -830,6 +871,329 @@ def _scene_object_shade_flat(params: Dict[str, Any]) -> Dict[str, Any]:
     return _scene_object_shade(params, smooth=False)
 
 
+def _scene_object_transform_many(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_names = [str(x) for x in params.get("object_names", [])]
+    location = params.get("location")
+    rotation = params.get("rotation")
+    scale = params.get("scale")
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "object_names": object_names,
+        "location": location,
+        "rotation": rotation,
+        "scale": scale,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+updated = []
+for name in params["object_names"]:
+    obj = bpy.data.objects.get(name)
+    if not obj:
+        raise ValueError(f"Object not found: {name}")
+    if params.get("location") is not None:
+        obj.location = params["location"]
+    if params.get("rotation") is not None:
+        obj.rotation_euler = params["rotation"]
+    if params.get("scale") is not None:
+        obj.scale = params["scale"]
+    updated.append(obj.name)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "updated": updated, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_object_boolean(params: Dict[str, Any], operation: str) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    target_object = str(params["target_object"])
+    with_object = str(params["with_object"])
+    apply = bool(params.get("apply", True))
+    delete_with = bool(params.get("delete_with", True))
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "target_object": target_object,
+        "with_object": with_object,
+        "operation": operation,
+        "apply": apply,
+        "delete_with": delete_with,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+target = bpy.data.objects.get(params["target_object"])
+other = bpy.data.objects.get(params["with_object"])
+if not target:
+    raise ValueError(f"Target object not found: {params['target_object']}")
+if not other:
+    raise ValueError(f"With object not found: {params['with_object']}")
+if target.type != "MESH" or other.type != "MESH":
+    raise ValueError("Boolean objects must both be mesh objects")
+mod = target.modifiers.new(name=f"Bool_{params['operation']}", type="BOOLEAN")
+mod.operation = params["operation"]
+mod.object = other
+if params["apply"]:
+    bpy.ops.object.select_all(action="DESELECT")
+    target.select_set(True)
+    bpy.context.view_layer.objects.active = target
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+if params["delete_with"]:
+    to_remove = bpy.data.objects.get(params["with_object"])
+    if to_remove:
+        bpy.data.objects.remove(to_remove, do_unlink=True)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({
+  "ok": True,
+  "target": target.name,
+  "withObject": params["with_object"],
+  "operation": params["operation"],
+  "applied": bool(params["apply"]),
+  "deletedWithObject": bool(params["delete_with"]),
+  "output": params["output"],
+  "changed": True
+})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_object_boolean_union(params: Dict[str, Any]) -> Dict[str, Any]:
+    return _scene_object_boolean(params, operation="UNION")
+
+
+def _scene_object_boolean_difference(params: Dict[str, Any]) -> Dict[str, Any]:
+    return _scene_object_boolean(params, operation="DIFFERENCE")
+
+
+def _scene_object_boolean_intersect(params: Dict[str, Any]) -> Dict[str, Any]:
+    return _scene_object_boolean(params, operation="INTERSECT")
+
+
+def _scene_object_join(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_names = params.get("object_names")
+    if not isinstance(object_names, list) or len(object_names) < 2:
+        raise BridgeOperationError("INVALID_INPUT", "object_names must be a list with at least 2 objects")
+    output = _target_path(project, params.get("output"))
+    payload = {"object_names": [str(x) for x in object_names], "output": output}
+    script = _script(
+        """
+import bpy
+names = params["object_names"]
+objs = []
+for n in names:
+    o = bpy.data.objects.get(n)
+    if not o:
+        raise ValueError(f"Object not found: {n}")
+    objs.append(o)
+bpy.ops.object.select_all(action="DESELECT")
+for o in objs:
+    o.select_set(True)
+bpy.context.view_layer.objects.active = objs[0]
+bpy.ops.object.join()
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "joinedInto": objs[0].name, "joinedCount": len(objs), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_object_convert_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "output": output}
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.convert(target="MESH")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "type": obj.type, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_object_shrinkwrap(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    target_object = str(params["target_object"])
+    wrap_method = str(params.get("wrap_method", "NEAREST_SURFACEPOINT")).upper()
+    offset = float(params.get("offset", 0.0))
+    apply = bool(params.get("apply", True))
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "object_name": object_name,
+        "target_object": target_object,
+        "wrap_method": wrap_method,
+        "offset": offset,
+        "apply": apply,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+tgt = bpy.data.objects.get(params["target_object"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if not tgt:
+    raise ValueError(f"Target object not found: {params['target_object']}")
+if obj.type != "MESH" or tgt.type != "MESH":
+    raise ValueError("Shrinkwrap requires mesh objects")
+mod = obj.modifiers.new(name="Shrinkwrap", type="SHRINKWRAP")
+mod.target = tgt
+mod.wrap_method = params["wrap_method"]
+mod.offset = float(params["offset"])
+if params["apply"]:
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({
+  "ok": True,
+  "object": obj.name,
+  "target": tgt.name,
+  "wrapMethod": mod.wrap_method if not params["apply"] else params["wrap_method"],
+  "offset": float(params["offset"]),
+  "applied": bool(params["apply"]),
+  "output": params["output"],
+  "changed": True
+})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_object_data_transfer(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    target_object = str(params["target_object"])
+    data_domain = str(params.get("data_domain", "LOOP")).upper()
+    data_type = str(params.get("data_type", "CUSTOM_NORMAL")).upper()
+    apply = bool(params.get("apply", True))
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "object_name": object_name,
+        "target_object": target_object,
+        "data_domain": data_domain,
+        "data_type": data_type,
+        "apply": apply,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+tgt = bpy.data.objects.get(params["target_object"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if not tgt:
+    raise ValueError(f"Target object not found: {params['target_object']}")
+if obj.type != "MESH" or tgt.type != "MESH":
+    raise ValueError("Data transfer requires mesh objects")
+mod = obj.modifiers.new(name="DataTransfer", type="DATA_TRANSFER")
+mod.object = tgt
+domain = params["data_domain"]
+dtype = params["data_type"]
+if domain == "VERTEX":
+    mod.use_vert_data = True
+    mod.data_types_verts = {dtype}
+elif domain == "EDGE":
+    mod.use_edge_data = True
+    mod.data_types_edges = {dtype}
+elif domain == "POLY":
+    mod.use_poly_data = True
+    mod.data_types_polys = {dtype}
+else:
+    mod.use_loop_data = True
+    mod.data_types_loops = {dtype}
+if params["apply"]:
+    bpy.ops.object.select_all(action="DESELECT")
+    obj.select_set(True)
+    bpy.context.view_layer.objects.active = obj
+    bpy.ops.object.modifier_apply(modifier=mod.name)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({
+  "ok": True,
+  "object": obj.name,
+  "target": tgt.name,
+  "dataDomain": domain,
+  "dataType": dtype,
+  "applied": bool(params["apply"]),
+  "output": params["output"],
+  "changed": True
+})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_object_group_create(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    group_name = str(params["group_name"])
+    object_names = [str(x) for x in params.get("object_names", [])]
+    location = list(params.get("location", [0.0, 0.0, 0.0]))
+    output = _target_path(project, params.get("output"))
+    payload = {"group_name": group_name, "object_names": object_names, "location": location, "output": output}
+    script = _script(
+        """
+import bpy
+empty = bpy.data.objects.new(params["group_name"], None)
+empty.empty_display_type = "PLAIN_AXES"
+empty.location = tuple(params["location"])
+bpy.context.scene.collection.objects.link(empty)
+children = []
+for name in params["object_names"]:
+    obj = bpy.data.objects.get(name)
+    if not obj:
+        raise ValueError(f"Object not found: {name}")
+    obj.parent = empty
+    children.append(obj.name)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "group": empty.name, "children": children, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_object_parent_many(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    parent_name = str(params["parent_name"])
+    child_names = [str(x) for x in params.get("child_names", [])]
+    output = _target_path(project, params.get("output"))
+    payload = {"parent_name": parent_name, "child_names": child_names, "output": output}
+    script = _script(
+        """
+import bpy
+parent = bpy.data.objects.get(params["parent_name"])
+if not parent:
+    raise ValueError(f"Parent object not found: {params['parent_name']}")
+children = []
+for name in params["child_names"]:
+    obj = bpy.data.objects.get(name)
+    if not obj:
+        raise ValueError(f"Child object not found: {name}")
+    obj.parent = parent
+    children.append(obj.name)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "parent": parent.name, "children": children, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
 def _scene_camera_list(params: Dict[str, Any]) -> Dict[str, Any]:
     project = str(_require_file(str(params["project"])))
     script = _script(
@@ -972,6 +1336,86 @@ emit({
     return _run(script, blend_file=project, params=payload, timeout=60)
 
 
+def _scene_camera_look_at(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    camera_name = str(params["camera_name"])
+    target_object = params.get("target_object")
+    target_location = params.get("target_location")
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "camera_name": camera_name,
+        "target_object": str(target_object) if target_object else None,
+        "target_location": target_location,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+from mathutils import Vector
+cam = bpy.data.objects.get(params["camera_name"])
+if not cam or cam.type != "CAMERA":
+    raise ValueError(f"Camera not found: {params['camera_name']}")
+if params.get("target_object"):
+    tgt = bpy.data.objects.get(params["target_object"])
+    if not tgt:
+        raise ValueError(f"Target object not found: {params['target_object']}")
+    target = tgt.matrix_world.translation
+else:
+    if not params.get("target_location"):
+        raise ValueError("Provide target_object or target_location")
+    target = Vector(params["target_location"])
+direction = (target - cam.matrix_world.translation).normalized()
+cam.rotation_mode = "QUATERNION"
+cam.rotation_quaternion = direction.to_track_quat("-Z", "Y")
+cam.rotation_mode = "XYZ"
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "camera": cam.name, "targetObject": params.get("target_object"), "targetLocation": [target.x, target.y, target.z], "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=60)
+
+
+def _scene_camera_rig_product_shot(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    camera_name = str(params.get("camera_name") or "ProductCam")
+    target_object = str(params["target_object"])
+    distance = float(params.get("distance", 4.0))
+    height = float(params.get("height", 1.2))
+    lens = float(params.get("lens", 60.0))
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "camera_name": camera_name,
+        "target_object": target_object,
+        "distance": distance,
+        "height": height,
+        "lens": lens,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+from mathutils import Vector
+tgt = bpy.data.objects.get(params["target_object"])
+if not tgt:
+    raise ValueError(f"Target object not found: {params['target_object']}")
+bpy.ops.object.camera_add()
+cam = bpy.context.active_object
+cam.name = params["camera_name"]
+target = tgt.matrix_world.translation
+cam.location = Vector((target.x, target.y - float(params["distance"]), target.z + float(params["height"])))
+cam.data.lens = float(params["lens"])
+direction = (target - cam.matrix_world.translation).normalized()
+cam.rotation_mode = "QUATERNION"
+cam.rotation_quaternion = direction.to_track_quat("-Z", "Y")
+cam.rotation_mode = "XYZ"
+bpy.context.scene.camera = cam
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "camera": cam.name, "target": tgt.name, "distance": float(params["distance"]), "height": float(params["height"]), "lens": float(params["lens"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=60)
+
+
 def _parse_hex_color(color: str) -> list[float]:
     raw = color.strip().lstrip("#")
     if len(raw) not in {6, 8}:
@@ -1095,6 +1539,44 @@ emit({
     return _run(script, blend_file=project, params=payload, timeout=60)
 
 
+def _scene_light_rig_three_point(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    target_object = params.get("target_object")
+    output = _target_path(project, params.get("output"))
+    payload = {"target_object": str(target_object) if target_object else None, "output": output}
+    script = _script(
+        """
+import bpy
+from mathutils import Vector
+target = Vector((0.0, 0.0, 0.0))
+if params.get("target_object"):
+    t = bpy.data.objects.get(params["target_object"])
+    if not t:
+        raise ValueError(f"Target object not found: {params['target_object']}")
+    target = t.matrix_world.translation
+lights = []
+specs = [
+    ("KeyLight", (2.5, -2.8, 3.0), 1000.0),
+    ("FillLight", (-2.5, -2.2, 1.8), 450.0),
+    ("BackLight", (0.0, 2.8, 2.6), 700.0),
+]
+for name, loc, energy in specs:
+    bpy.ops.object.light_add(type="AREA", location=(target.x + loc[0], target.y + loc[1], target.z + loc[2]))
+    l = bpy.context.active_object
+    l.name = name
+    l.data.energy = energy
+    direction = (target - l.matrix_world.translation).normalized()
+    l.rotation_mode = "QUATERNION"
+    l.rotation_quaternion = direction.to_track_quat("-Z", "Y")
+    l.rotation_mode = "XYZ"
+    lights.append(l.name)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "lights": lights, "targetObject": params.get("target_object"), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=60)
+
+
 def _scene_material_list(params: Dict[str, Any]) -> Dict[str, Any]:
     project = str(_require_file(str(params["project"])))
     script = _script(
@@ -1188,6 +1670,37 @@ emit({"ok": True, "object": obj.name, "material": mat.name, "output": target, "c
     return _run(script, blend_file=project, params=payload, timeout=60)
 
 
+def _scene_material_assign_many(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_names = [str(x) for x in params.get("object_names", [])]
+    material_name = str(params["material_name"])
+    output = _target_path(project, params.get("output"))
+    payload = {"object_names": object_names, "material_name": material_name, "output": output}
+    script = _script(
+        """
+import bpy
+mat = bpy.data.materials.get(params["material_name"])
+if not mat:
+    raise ValueError(f"Material not found: {params['material_name']}")
+updated = []
+for name in params["object_names"]:
+    obj = bpy.data.objects.get(name)
+    if not obj:
+        raise ValueError(f"Object not found: {name}")
+    if obj.type != "MESH":
+        raise ValueError(f"Object is not a mesh: {obj.name}")
+    if len(obj.data.materials) == 0:
+        obj.data.materials.append(mat)
+    else:
+        obj.data.materials[0] = mat
+    updated.append(obj.name)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "material": mat.name, "updated": updated, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=60)
+
+
 def _scene_material_set_value(params: Dict[str, Any], key: str, value: Any) -> Dict[str, Any]:
     project = str(_require_file(str(params["project"])))
     material_name = str(params["material_name"])
@@ -1233,6 +1746,42 @@ def _scene_material_set_metallic(params: Dict[str, Any]) -> Dict[str, Any]:
 def _scene_material_set_roughness(params: Dict[str, Any]) -> Dict[str, Any]:
     p = dict(params)
     return _scene_material_set_value(p, "roughness", float(params["roughness"]))
+
+
+def _scene_material_set_node_input(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    material_name = str(params["material_name"])
+    node_name = str(params["node_name"])
+    input_name = str(params["input_name"])
+    value = params["value"]
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "material_name": material_name,
+        "node_name": node_name,
+        "input_name": input_name,
+        "value": value,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+mat = bpy.data.materials.get(params["material_name"])
+if not mat:
+    raise ValueError(f"Material not found: {params['material_name']}")
+if not mat.use_nodes or not mat.node_tree:
+    raise ValueError("Material does not use nodes")
+node = mat.node_tree.nodes.get(params["node_name"])
+if not node:
+    raise ValueError(f"Node not found: {params['node_name']}")
+sock = node.inputs.get(params["input_name"])
+if not sock:
+    raise ValueError(f"Node input not found: {params['input_name']}")
+sock.default_value = params["value"]
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "material": mat.name, "node": node.name, "input": sock.name, "value": params["value"], "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=60)
 
 
 def _scene_modifier_list(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1322,6 +1871,861 @@ emit({"ok": True, "object": obj.name, "applied": params["modifier_name"], "outpu
 """
     )
     return _run(script, blend_file=project, params=payload, timeout=60)
+
+
+def _scene_modifier_set(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    modifier_name = str(params["modifier_name"])
+    property_name = str(params["property_name"])
+    value = params["value"]
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "object_name": object_name,
+        "modifier_name": modifier_name,
+        "property_name": property_name,
+        "value": value,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+mod = obj.modifiers.get(params["modifier_name"])
+if not mod:
+    raise ValueError(f"Modifier not found: {params['modifier_name']}")
+prop = params["property_name"]
+val = params["value"]
+try:
+    setattr(mod, prop, val)
+except Exception:
+    mod[prop] = val
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "modifier": mod.name, "property": prop, "value": val, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=60)
+
+
+def _scene_mesh_smooth(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    iterations = int(params.get("iterations", 5))
+    factor = float(params.get("factor", 0.5))
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "iterations": iterations, "factor": factor, "output": output}
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.select_all(action="SELECT")
+bpy.ops.mesh.vertices_smooth(factor=float(params["factor"]), repeat=int(params["iterations"]))
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "iterations": int(params["iterations"]), "factor": float(params["factor"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_subdivide(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    cuts = int(params.get("cuts", 1))
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "cuts": cuts, "output": output}
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.select_all(action="SELECT")
+bpy.ops.mesh.subdivide(number_cuts=int(params["cuts"]))
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "cuts": int(params["cuts"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_select_verts(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    indices = [int(i) for i in params.get("indices", [])]
+    replace = bool(params.get("replace", True))
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "indices": indices, "replace": replace, "output": output}
+    script = _script(
+        """
+import bpy
+import bmesh
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bm = bmesh.from_edit_mesh(obj.data)
+bm.verts.ensure_lookup_table()
+if params["replace"]:
+    for v in bm.verts:
+        v.select = False
+selected = 0
+for idx in params["indices"]:
+    if 0 <= int(idx) < len(bm.verts):
+        bm.verts[int(idx)].select = True
+        selected += 1
+bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "selected": selected, "replace": bool(params["replace"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_clear_selection(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "output": output}
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.select_all(action="DESELECT")
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_transform_selected(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    location = list(params.get("location", [0.0, 0.0, 0.0]))
+    rotation = list(params.get("rotation", [0.0, 0.0, 0.0]))
+    scale = list(params.get("scale", [1.0, 1.0, 1.0]))
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "location": location, "rotation": rotation, "scale": scale, "output": output}
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.transform.translate(value=tuple(params["location"]))
+bpy.ops.transform.rotate(value=float(params["rotation"][0]), orient_axis="X")
+bpy.ops.transform.rotate(value=float(params["rotation"][1]), orient_axis="Y")
+bpy.ops.transform.rotate(value=float(params["rotation"][2]), orient_axis="Z")
+bpy.ops.transform.resize(value=tuple(params["scale"]))
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "location": params["location"], "rotation": params["rotation"], "scale": params["scale"], "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_proportional_edit(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    location = list(params.get("location", [0.0, 0.0, 0.0]))
+    scale = list(params.get("scale", [1.0, 1.0, 1.0]))
+    falloff = str(params.get("falloff", "SMOOTH"))
+    radius = float(params.get("radius", 1.0))
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "object_name": object_name,
+        "location": location,
+        "scale": scale,
+        "falloff": falloff,
+        "radius": radius,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.transform.translate(
+    value=tuple(params["location"]),
+    use_proportional_edit=True,
+    proportional_edit_falloff=params["falloff"],
+    proportional_size=float(params["radius"]),
+)
+bpy.ops.transform.resize(
+    value=tuple(params["scale"]),
+    use_proportional_edit=True,
+    proportional_edit_falloff=params["falloff"],
+    proportional_size=float(params["radius"]),
+)
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "location": params["location"], "scale": params["scale"], "falloff": params["falloff"], "radius": float(params["radius"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_extrude_region(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    offset = list(params.get("offset", [0.0, 0.0, 0.1]))
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "offset": offset, "output": output}
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.extrude_region_move(TRANSFORM_OT_translate={"value": tuple(params["offset"])})
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "offset": params["offset"], "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_bevel_verts(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    amount = float(params.get("amount", 0.02))
+    segments = int(params.get("segments", 2))
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "amount": amount, "segments": segments, "output": output}
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.select_mode(type="VERT")
+bpy.ops.mesh.bevel(offset=float(params["amount"]), segments=int(params["segments"]), affect="VERTICES")
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "amount": float(params["amount"]), "segments": int(params["segments"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_merge_by_distance(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    distance = float(params.get("distance", 0.0001))
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "distance": distance, "output": output}
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.remove_doubles(threshold=float(params["distance"]))
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "distance": float(params["distance"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_loop_cut(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    edge_indices = [int(i) for i in params.get("edge_indices", [])]
+    cuts = int(params.get("cuts", 1))
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "edge_indices": edge_indices, "cuts": cuts, "output": output}
+    script = _script(
+        """
+import bpy
+import bmesh
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bm = bmesh.from_edit_mesh(obj.data)
+bm.edges.ensure_lookup_table()
+edges = []
+for idx in params["edge_indices"]:
+    if 0 <= int(idx) < len(bm.edges):
+        edges.append(bm.edges[int(idx)])
+if not edges:
+    raise ValueError("No valid edge indices provided for loop cut")
+bmesh.ops.subdivide_edges(bm, edges=edges, cuts=int(params["cuts"]), use_grid_fill=True)
+bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=True)
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "edgeCount": len(edges), "cuts": int(params["cuts"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_slide_loop(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    edge_indices = [int(i) for i in params.get("edge_indices", [])]
+    factor = float(params.get("factor", 0.0))
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "edge_indices": edge_indices, "factor": factor, "output": output}
+    script = _script(
+        """
+import bpy
+import bmesh
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.select_mode(type="EDGE")
+bpy.ops.mesh.select_all(action="DESELECT")
+bm = bmesh.from_edit_mesh(obj.data)
+bm.edges.ensure_lookup_table()
+selected_edges = []
+for idx in params["edge_indices"]:
+    if 0 <= int(idx) < len(bm.edges):
+        e = bm.edges[int(idx)]
+        e.select = True
+        selected_edges.append(e)
+if not selected_edges:
+    raise ValueError("No valid edge indices provided for slide-loop")
+# Background-safe loop slide approximation: move each edge vertex along one connected selected edge.
+vert_delta = {}
+for e in selected_edges:
+    v1, v2 = e.verts[0], e.verts[1]
+    if v1.index not in vert_delta:
+        vert_delta[v1.index] = (v2.co - v1.co)
+    if v2.index not in vert_delta:
+        vert_delta[v2.index] = (v1.co - v2.co)
+for v in bm.verts:
+    d = vert_delta.get(v.index)
+    if d is not None:
+        v.co = v.co + (d * float(params["factor"]))
+bmesh.update_edit_mesh(obj.data, loop_triangles=False, destructive=False)
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "edgeCount": len(selected_edges), "factor": float(params["factor"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_bisect(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    plane_co = list(params.get("plane_co", [0.0, 0.0, 0.0]))
+    plane_no = list(params.get("plane_no", [0.0, 0.0, 1.0]))
+    clear_inner = bool(params.get("clear_inner", False))
+    clear_outer = bool(params.get("clear_outer", False))
+    use_fill = bool(params.get("use_fill", False))
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "object_name": object_name,
+        "plane_co": plane_co,
+        "plane_no": plane_no,
+        "clear_inner": clear_inner,
+        "clear_outer": clear_outer,
+        "use_fill": use_fill,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.select_all(action="SELECT")
+bpy.ops.mesh.bisect(
+    plane_co=tuple(params["plane_co"]),
+    plane_no=tuple(params["plane_no"]),
+    clear_inner=bool(params["clear_inner"]),
+    clear_outer=bool(params["clear_outer"]),
+    use_fill=bool(params["use_fill"]),
+)
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "planeCo": params["plane_co"], "planeNo": params["plane_no"], "clearInner": bool(params["clear_inner"]), "clearOuter": bool(params["clear_outer"]), "useFill": bool(params["use_fill"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_mesh_clean(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    merge_distance = float(params.get("merge_distance", 0.0001))
+    dissolve_angle = float(params.get("dissolve_angle", 0.01))
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "object_name": object_name,
+        "merge_distance": merge_distance,
+        "dissolve_angle": dissolve_angle,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.mode_set(mode="EDIT")
+bpy.ops.mesh.select_all(action="SELECT")
+bpy.ops.mesh.remove_doubles(threshold=float(params["merge_distance"]))
+bpy.ops.mesh.dissolve_limited(angle_limit=float(params["dissolve_angle"]))
+bpy.ops.object.mode_set(mode="OBJECT")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "mergeDistance": float(params["merge_distance"]), "dissolveAngle": float(params["dissolve_angle"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_lattice_add(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    name = str(params.get("name") or "Lattice")
+    location = list(params.get("location", [0.0, 0.0, 0.0]))
+    scale = list(params.get("scale", [1.0, 1.0, 1.0]))
+    points_u = int(params.get("points_u", 2))
+    points_v = int(params.get("points_v", 2))
+    points_w = int(params.get("points_w", 2))
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "name": name,
+        "location": location,
+        "scale": scale,
+        "points_u": points_u,
+        "points_v": points_v,
+        "points_w": points_w,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+lat_data = bpy.data.lattices.new(params["name"] + "Data")
+lat_data.points_u = int(params["points_u"])
+lat_data.points_v = int(params["points_v"])
+lat_data.points_w = int(params["points_w"])
+lat_obj = bpy.data.objects.new(params["name"], lat_data)
+lat_obj.location = tuple(params["location"])
+lat_obj.scale = tuple(params["scale"])
+bpy.context.scene.collection.objects.link(lat_obj)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({
+  "ok": True,
+  "lattice": lat_obj.name,
+  "points": [lat_data.points_u, lat_data.points_v, lat_data.points_w],
+  "output": params["output"],
+  "changed": True
+})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_lattice_bind(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    lattice_name = str(params["lattice_name"])
+    modifier_name = str(params.get("modifier_name") or "Lattice")
+    output = _target_path(project, params.get("output"))
+    payload = {"object_name": object_name, "lattice_name": lattice_name, "modifier_name": modifier_name, "output": output}
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+lat = bpy.data.objects.get(params["lattice_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if not lat or lat.type != "LATTICE":
+    raise ValueError(f"Lattice not found: {params['lattice_name']}")
+mod = obj.modifiers.new(name=params["modifier_name"], type="LATTICE")
+mod.object = lat
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "lattice": lat.name, "modifier": mod.name, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_lattice_set_point(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    lattice_name = str(params["lattice_name"])
+    u = int(params["u"])
+    v = int(params["v"])
+    w = int(params["w"])
+    location = list(params.get("location", [0.0, 0.0, 0.0]))
+    delta = bool(params.get("delta", False))
+    output = _target_path(project, params.get("output"))
+    payload = {"lattice_name": lattice_name, "u": u, "v": v, "w": w, "location": location, "delta": delta, "output": output}
+    script = _script(
+        """
+import bpy
+lat = bpy.data.objects.get(params["lattice_name"])
+if not lat or lat.type != "LATTICE":
+    raise ValueError(f"Lattice not found: {params['lattice_name']}")
+data = lat.data
+u = int(params["u"])
+v = int(params["v"])
+w = int(params["w"])
+if u < 0 or u >= data.points_u or v < 0 or v >= data.points_v or w < 0 or w >= data.points_w:
+    raise ValueError("Lattice point indices out of range")
+idx = w * (data.points_u * data.points_v) + v * data.points_u + u
+pt = data.points[idx]
+vec = tuple(params["location"])
+if params["delta"]:
+    pt.co_deform = (pt.co_deform[0] + vec[0], pt.co_deform[1] + vec[1], pt.co_deform[2] + vec[2])
+else:
+    pt.co_deform = vec
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({
+  "ok": True,
+  "lattice": lat.name,
+  "index": [u, v, w],
+  "coDeform": [pt.co_deform[0], pt.co_deform[1], pt.co_deform[2]],
+  "delta": bool(params["delta"]),
+  "output": params["output"],
+  "changed": True
+})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_curve_add_bezier(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    name = str(params.get("name") or "BezierCurve")
+    points = params.get("points") or [[0.0, 0.0, 0.0], [0.0, 0.0, 1.0]]
+    output = _target_path(project, params.get("output"))
+    payload = {"name": name, "points": points, "output": output}
+    script = _script(
+        """
+import bpy
+pts = params["points"]
+if not isinstance(pts, list) or len(pts) < 2:
+    raise ValueError("points must include at least 2 entries")
+curve_data = bpy.data.curves.new(name=params["name"] + "Data", type="CURVE")
+curve_data.dimensions = "3D"
+spline = curve_data.splines.new(type="BEZIER")
+spline.bezier_points.add(len(pts) - 1)
+for i, p in enumerate(pts):
+    bp = spline.bezier_points[i]
+    bp.co = tuple(p)
+    bp.handle_left_type = "AUTO"
+    bp.handle_right_type = "AUTO"
+obj = bpy.data.objects.new(params["name"], curve_data)
+bpy.context.scene.collection.objects.link(obj)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "curve": obj.name, "points": len(pts), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_curve_set_handle(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    curve_name = str(params["curve_name"])
+    point_index = int(params["point_index"])
+    handle = str(params.get("handle", "left")).lower()
+    handle_location = list(params.get("handle_location", [0.0, 0.0, 0.0]))
+    handle_type = params.get("handle_type")
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "curve_name": curve_name,
+        "point_index": point_index,
+        "handle": handle,
+        "handle_location": handle_location,
+        "handle_type": handle_type,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["curve_name"])
+if not obj or obj.type != "CURVE":
+    raise ValueError(f"Curve not found: {params['curve_name']}")
+if len(obj.data.splines) == 0 or obj.data.splines[0].type != "BEZIER":
+    raise ValueError("Curve has no bezier spline")
+bp = obj.data.splines[0].bezier_points[int(params["point_index"])]
+loc = tuple(params["handle_location"])
+if params["handle"] == "right":
+    bp.handle_right = loc
+    if params.get("handle_type"):
+        bp.handle_right_type = str(params["handle_type"]).upper()
+else:
+    bp.handle_left = loc
+    if params.get("handle_type"):
+        bp.handle_left_type = str(params["handle_type"]).upper()
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({
+  "ok": True,
+  "curve": obj.name,
+  "pointIndex": int(params["point_index"]),
+  "handle": params["handle"],
+  "output": params["output"],
+  "changed": True
+})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_curve_to_mesh(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    curve_name = str(params["curve_name"])
+    output = _target_path(project, params.get("output"))
+    payload = {"curve_name": curve_name, "output": output}
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["curve_name"])
+if not obj or obj.type != "CURVE":
+    raise ValueError(f"Curve not found: {params['curve_name']}")
+bpy.ops.object.select_all(action="DESELECT")
+obj.select_set(True)
+bpy.context.view_layer.objects.active = obj
+bpy.ops.object.convert(target="MESH")
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "type": obj.type, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_add_reference_image(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    image_path = str(_require_file(str(params["image_path"])).resolve())
+    name = str(params.get("name") or "ReferenceImage")
+    location = list(params.get("location", [0.0, 0.0, 0.0]))
+    scale = list(params.get("scale", [1.0, 1.0, 1.0]))
+    output = _target_path(project, params.get("output"))
+    payload = {"image_path": image_path, "name": name, "location": location, "scale": scale, "output": output}
+    script = _script(
+        """
+import bpy
+img = bpy.data.images.load(params["image_path"], check_existing=True)
+obj = bpy.data.objects.new(params["name"], None)
+obj.empty_display_type = "IMAGE"
+obj.data = img
+obj.location = tuple(params["location"])
+obj.scale = tuple(params["scale"])
+bpy.context.scene.collection.objects.link(obj)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "image": img.filepath, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_set_orthographic(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    camera_name = str(params["camera_name"])
+    ortho_scale = float(params.get("ortho_scale", 2.0))
+    output = _target_path(project, params.get("output"))
+    payload = {"camera_name": camera_name, "ortho_scale": ortho_scale, "output": output}
+    script = _script(
+        """
+import bpy
+cam_obj = bpy.data.objects.get(params["camera_name"])
+if not cam_obj or cam_obj.type != "CAMERA":
+    raise ValueError(f"Camera not found: {params['camera_name']}")
+cam_obj.data.type = "ORTHO"
+cam_obj.data.ortho_scale = float(params["ortho_scale"])
+bpy.context.scene.camera = cam_obj
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "camera": cam_obj.name, "type": cam_obj.data.type, "orthoScale": cam_obj.data.ortho_scale, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
+def _scene_world_set_background(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    rgba = _parse_hex_color(str(params["color"]))
+    strength = float(params.get("strength", 1.0))
+    output = _target_path(project, params.get("output"))
+    payload = {"color": rgba, "strength": strength, "output": output}
+    script = _script(
+        """
+import bpy
+scene = bpy.context.scene
+if scene.world is None:
+    scene.world = bpy.data.worlds.new("World")
+world = scene.world
+world.use_nodes = True
+nt = world.node_tree
+bg = nt.nodes.get("Background")
+if not bg:
+    bg = nt.nodes.new(type="ShaderNodeBackground")
+    out = nt.nodes.get("World Output") or nt.nodes.new(type="ShaderNodeOutputWorld")
+    nt.links.new(bg.outputs["Background"], out.inputs["Surface"])
+bg.inputs["Color"].default_value = params["color"]
+bg.inputs["Strength"].default_value = float(params["strength"])
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "color": params["color"], "strength": float(params["strength"]), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=60)
+
+
+def _scene_color_management_set(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "view_transform": params.get("view_transform"),
+        "look": params.get("look"),
+        "exposure": params.get("exposure"),
+        "gamma": params.get("gamma"),
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+vs = bpy.context.scene.view_settings
+if params.get("view_transform") is not None:
+    vs.view_transform = params["view_transform"]
+if params.get("look") is not None:
+    vs.look = params["look"]
+if params.get("exposure") is not None:
+    vs.exposure = float(params["exposure"])
+if params.get("gamma") is not None:
+    vs.gamma = float(params["gamma"])
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "viewTransform": vs.view_transform, "look": vs.look, "exposure": float(vs.exposure), "gamma": float(vs.gamma), "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=60)
+
+
+def _analyze_silhouette_diff(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    source_image = str(_require_file(str(params["source_image"])).resolve())
+    reference_image = str(_require_file(str(params["reference_image"])).resolve())
+    threshold = float(params.get("threshold", 0.1))
+    payload = {"source_image": source_image, "reference_image": reference_image, "threshold": threshold}
+    script = _script(
+        """
+import bpy
+src = bpy.data.images.load(params["source_image"], check_existing=True)
+ref = bpy.data.images.load(params["reference_image"], check_existing=True)
+if src.size[0] <= 0 or src.size[1] <= 0 or ref.size[0] <= 0 or ref.size[1] <= 0:
+    raise ValueError("Invalid image dimensions")
+w = min(int(src.size[0]), int(ref.size[0]))
+h = min(int(src.size[1]), int(ref.size[1]))
+sp = list(src.pixels)
+rp = list(ref.pixels)
+def is_on(px, idx, t):
+    a = float(px[idx + 3])
+    lum = 0.2126 * float(px[idx]) + 0.7152 * float(px[idx + 1]) + 0.0722 * float(px[idx + 2])
+    return a > t or lum > t
+mismatch = 0
+intersection = 0
+union = 0
+for y in range(h):
+    for x in range(w):
+        si = (y * int(src.size[0]) + x) * 4
+        ri = (y * int(ref.size[0]) + x) * 4
+        s_on = is_on(sp, si, float(params["threshold"]))
+        r_on = is_on(rp, ri, float(params["threshold"]))
+        if s_on != r_on:
+            mismatch += 1
+        if s_on and r_on:
+            intersection += 1
+        if s_on or r_on:
+            union += 1
+total = w * h
+diff = (float(mismatch) / float(total)) if total else 1.0
+iou = (float(intersection) / float(union)) if union else 0.0
+emit({"ok": True, "width": w, "height": h, "difference": diff, "iou": iou, "threshold": float(params["threshold"]), "changed": False})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
 
 
 def _scene_geometry_nodes_attach(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -1967,6 +3371,29 @@ def _render_cancel(params: Dict[str, Any]) -> Dict[str, Any]:
         return {"jobId": job_id, "status": job.get("status"), "cancelled": False}
 
 
+def _bridge_run_python(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = params.get("project")
+    blend_file: Optional[str] = None
+    save_path: Optional[str] = None
+    if project:
+        blend_file = str(_require_file(str(project)))
+        save_path = blend_file
+    code = str(params["code"])
+    user_params = params.get("user_params", {})
+    payload = {"code": code, "user_params": user_params, "save_path": save_path}
+    script = _script(
+        """
+import bpy
+scope = {"bpy": bpy, "params": params.get("user_params", {})}
+exec(params["code"], scope, scope)
+if params.get("save_path"):
+    bpy.ops.wm.save_as_mainfile(filepath=params["save_path"])
+emit({"ok": True, "changed": True})
+"""
+    )
+    return _run(script, blend_file=blend_file, params=payload, timeout=float(params.get("timeout_seconds", 120)))
+
+
 def execute(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
     operations: Dict[str, Callable[[Dict[str, Any]], Dict[str, Any]]] = {
         "system.health": _system_health,
@@ -1993,25 +3420,65 @@ def execute(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "scene.object.origin_set": _scene_object_origin_set,
         "scene.object.shade_smooth": _scene_object_shade_smooth,
         "scene.object.shade_flat": _scene_object_shade_flat,
+        "scene.object.transform_many": _scene_object_transform_many,
+        "scene.object.boolean_union": _scene_object_boolean_union,
+        "scene.object.boolean_difference": _scene_object_boolean_difference,
+        "scene.object.boolean_intersect": _scene_object_boolean_intersect,
+        "scene.object.join": _scene_object_join,
+        "scene.object.convert_mesh": _scene_object_convert_mesh,
+        "scene.object.shrinkwrap": _scene_object_shrinkwrap,
+        "scene.object.data_transfer": _scene_object_data_transfer,
+        "scene.object.group_create": _scene_object_group_create,
+        "scene.object.parent_many": _scene_object_parent_many,
         "scene.camera.list": _scene_camera_list,
         "scene.camera.add": _scene_camera_add,
         "scene.camera.set_active": _scene_camera_set_active,
         "scene.camera.set_lens": _scene_camera_set_lens,
         "scene.camera.set_dof": _scene_camera_set_dof,
+        "scene.camera.look_at": _scene_camera_look_at,
+        "scene.camera.rig_product_shot": _scene_camera_rig_product_shot,
         "scene.light.add": _scene_light_add,
         "scene.light.list": _scene_light_list,
         "scene.light.set_energy": _scene_light_set_energy,
         "scene.light.set_color": _scene_light_set_color,
+        "scene.light.rig_three_point": _scene_light_rig_three_point,
         "scene.material.list": _scene_material_list,
         "scene.material.create": _scene_material_create,
         "scene.material.assign": _scene_material_assign,
+        "scene.material.assign_many": _scene_material_assign_many,
         "scene.material.set_base_color": _scene_material_set_base_color,
         "scene.material.set_metallic": _scene_material_set_metallic,
         "scene.material.set_roughness": _scene_material_set_roughness,
+        "scene.material.set_node_input": _scene_material_set_node_input,
         "scene.modifier.list": _scene_modifier_list,
         "scene.modifier.add": _scene_modifier_add,
         "scene.modifier.remove": _scene_modifier_remove,
         "scene.modifier.apply": _scene_modifier_apply,
+        "scene.modifier.set": _scene_modifier_set,
+        "scene.mesh.smooth": _scene_mesh_smooth,
+        "scene.mesh.subdivide": _scene_mesh_subdivide,
+        "scene.mesh.select_verts": _scene_mesh_select_verts,
+        "scene.mesh.clear_selection": _scene_mesh_clear_selection,
+        "scene.mesh.transform_selected": _scene_mesh_transform_selected,
+        "scene.mesh.proportional_edit": _scene_mesh_proportional_edit,
+        "scene.mesh.extrude_region": _scene_mesh_extrude_region,
+        "scene.mesh.bevel_verts": _scene_mesh_bevel_verts,
+        "scene.mesh.merge_by_distance": _scene_mesh_merge_by_distance,
+        "scene.mesh.loop_cut": _scene_mesh_loop_cut,
+        "scene.mesh.slide_loop": _scene_mesh_slide_loop,
+        "scene.mesh.bisect": _scene_mesh_bisect,
+        "scene.mesh.clean": _scene_mesh_clean,
+        "scene.lattice.add": _scene_lattice_add,
+        "scene.lattice.bind": _scene_lattice_bind,
+        "scene.lattice.set_point": _scene_lattice_set_point,
+        "scene.curve.add_bezier": _scene_curve_add_bezier,
+        "scene.curve.set_handle": _scene_curve_set_handle,
+        "scene.curve.to_mesh": _scene_curve_to_mesh,
+        "scene.add_reference_image": _scene_add_reference_image,
+        "scene.set_orthographic": _scene_set_orthographic,
+        "scene.world.set_background": _scene_world_set_background,
+        "scene.color_management.set": _scene_color_management_set,
+        "analyze.silhouette_diff": _analyze_silhouette_diff,
         "scene.geometry_nodes.attach": _scene_geometry_nodes_attach,
         "scene.geometry_nodes.set_input": _scene_geometry_nodes_set_input,
         "scene.timeline.set_frame_range": _scene_timeline_set_frame_range,
@@ -2040,6 +3507,7 @@ def execute(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "render.animation": _render_animation,
         "render.status": _render_status,
         "render.cancel": _render_cancel,
+        "bridge.run_python": _bridge_run_python,
     }
     operation = operations.get(method)
     if operation is None:

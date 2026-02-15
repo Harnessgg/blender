@@ -11,6 +11,12 @@ from typing import Any, Dict, Optional
 RESULT_PREFIX = "__HARNESS_JSON__"
 
 
+def _windows_creationflags() -> int:
+    if os.name == "nt":
+        return subprocess.CREATE_NO_WINDOW
+    return 0
+
+
 class BlenderRunError(Exception):
     def __init__(self, code: str, message: str):
         super().__init__(message)
@@ -43,7 +49,13 @@ def resolve_blender_bin() -> Path:
 def blender_version() -> str:
     blender = resolve_blender_bin()
     try:
-        proc = subprocess.run([str(blender), "--version"], capture_output=True, text=True, timeout=10)
+        proc = subprocess.run(
+            [str(blender), "--version"],
+            capture_output=True,
+            text=True,
+            timeout=10,
+            creationflags=_windows_creationflags(),
+        )
     except Exception as exc:
         raise BlenderRunError("BLENDER_EXEC_FAILED", str(exc)) from exc
     if proc.returncode != 0:
@@ -72,7 +84,14 @@ def run_blender_script(
         env = os.environ.copy()
         env["HARNESS_PARAMS"] = json.dumps(params or {})
         try:
-            proc = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout_seconds, env=env)
+            proc = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout_seconds,
+                env=env,
+                creationflags=_windows_creationflags(),
+            )
         except subprocess.TimeoutExpired as exc:
             raise BlenderRunError("BLENDER_EXEC_FAILED", f"Blender timed out after {timeout_seconds}s") from exc
         except Exception as exc:
@@ -94,4 +113,3 @@ def run_blender_script(
                 return payload
 
         raise BlenderRunError("BLENDER_EXEC_FAILED", "Blender completed without result payload")
-
