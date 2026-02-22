@@ -1,9 +1,11 @@
 # Command Spec (LLM)
 
+Guidance for agents: Use CLI commands for interactive exploration and when building something new. Use the Python API for batch operations on known-good workflows.
+
 Global rules:
 1. Commands print one JSON object to stdout.
 2. Bridge-backed commands fail with `BRIDGE_UNAVAILABLE` if bridge is down.
-3. Start bridge with `harness-blender bridge start`.
+3. Start bridge with `harnessgg-blender bridge start`.
 
 Exit codes:
 - `0` success
@@ -17,6 +19,7 @@ Implemented RPC methods:
 - `system.health`
 - `system.version`
 - `system.actions`
+- `system.capabilities`
 - `system.doctor`
 - `project.new`
 - `project.copy`
@@ -30,12 +33,14 @@ Implemented RPC methods:
 - `scene.object.add`
 - `scene.object.transform`
 - `scene.object.delete`
+- `scene.object.delete_all`
 - `scene.object.duplicate`
 - `scene.object.rename`
 - `scene.object.parent`
 - `scene.object.unparent`
 - `scene.object.apply_transform`
 - `scene.object.origin_set`
+- `scene.object.material_list`
 - `scene.object.shade_smooth`
 - `scene.object.shade_flat`
 - `scene.object.transform_many`

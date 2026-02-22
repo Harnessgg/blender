@@ -3,7 +3,7 @@ import subprocess
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["harness-blender", *args], capture_output=True, text=True, check=False)
+    return subprocess.run(["harnessgg-blender", *args], capture_output=True, text=True, check=False)
 
 
 def test_version_envelope() -> None:
@@ -80,6 +80,24 @@ def test_actions_include_precision_methods() -> None:
     assert "scene.material.assign_many" in actions
     assert "scene.light.rig_three_point" in actions
     assert "scene.camera.rig_product_shot" in actions
+
+
+def test_capabilities_discover_commands() -> None:
+    proc = _run("capabilities")
+    assert proc.returncode == 0
+    payload = json.loads(proc.stdout)
+    assert payload["ok"] is True
+    assert payload["command"] == "capabilities"
+    data = payload["data"]
+    assert data["cliBinary"] == "harnessgg-blender"
+    assert "capabilities" in data["cliCommands"]
+    assert "actions" in data["cliCommands"]
+    assert "system.actions" in data["bridgeActions"]
+
+
+def test_capabilities_rejects_extra_args() -> None:
+    proc = _run("capabilities", "extra")
+    assert proc.returncode != 0
 
 
 def test_run_plan_help_available() -> None:

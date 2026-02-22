@@ -21,6 +21,7 @@ ACTION_METHODS = [
     "system.health",
     "system.version",
     "system.actions",
+    "system.capabilities",
     "system.doctor",
     "project.new",
     "project.copy",
@@ -34,6 +35,8 @@ ACTION_METHODS = [
     "scene.object.add",
     "scene.object.transform",
     "scene.object.delete",
+    "scene.object.delete_all",
+    "scene.object.material_list",
     "scene.object.duplicate",
     "scene.object.rename",
     "scene.object.parent",
@@ -90,6 +93,7 @@ ACTION_METHODS = [
     "scene.mesh.slide_loop",
     "scene.mesh.bisect",
     "scene.mesh.clean",
+    "scene.mesh.set_vertex_positions",
     "scene.lattice.add",
     "scene.lattice.bind",
     "scene.lattice.set_point",
@@ -201,6 +205,10 @@ def _system_version(_: Dict[str, Any]) -> Dict[str, Any]:
 
 def _system_actions(_: Dict[str, Any]) -> Dict[str, Any]:
     return {"actions": ACTION_METHODS}
+
+
+def _system_capabilities(_: Dict[str, Any]) -> Dict[str, Any]:
+    return {"actions": ACTION_METHODS, "harnessVersion": __version__}
 
 
 def _system_doctor(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -565,6 +573,20 @@ emit({"ok": True, "objects": objects})
 def _scene_object_add(params: Dict[str, Any]) -> Dict[str, Any]:
     project = str(_require_file(str(params["project"])))
     primitive = str(params["primitive"]).upper()
+    primitive_aliases = {
+        "UV_SPHERE": "SPHERE",
+        "UV-SPHERE": "SPHERE",
+        "UVSPHERE": "SPHERE",
+    }
+    primitive = primitive_aliases.get(primitive, primitive)
+    valid_primitives = {"CUBE", "SPHERE", "CYLINDER", "PLANE", "CONE", "TORUS"}
+    if primitive not in valid_primitives:
+        hint = "Use SPHERE instead of UV_SPHERE." if "SPHERE" in primitive else None
+        options = ", ".join(sorted(valid_primitives))
+        message = f"Unsupported primitive: {primitive}. Valid primitives: {options}."
+        if hint:
+            message = f"{message} Hint: {hint}"
+        raise BridgeOperationError("INVALID_INPUT", message)
     output = _target_path(project, params.get("output"))
     payload = {
         "primitive": primitive,
@@ -585,21 +607,22 @@ name = params.get("name")
 target = params["output"]
 
 if primitive == "CUBE":
-    bpy.ops.mesh.primitive_cube_add(location=loc, rotation=rot, scale=scale)
+    bpy.ops.mesh.primitive_cube_add(location=loc, rotation=rot)
 elif primitive == "SPHERE":
-    bpy.ops.mesh.primitive_uv_sphere_add(location=loc, rotation=rot, scale=scale)
+    bpy.ops.mesh.primitive_uv_sphere_add(location=loc, rotation=rot)
 elif primitive == "CYLINDER":
-    bpy.ops.mesh.primitive_cylinder_add(location=loc, rotation=rot, scale=scale)
+    bpy.ops.mesh.primitive_cylinder_add(location=loc, rotation=rot)
 elif primitive == "PLANE":
-    bpy.ops.mesh.primitive_plane_add(location=loc, rotation=rot, scale=scale)
+    bpy.ops.mesh.primitive_plane_add(location=loc, rotation=rot)
 elif primitive == "CONE":
-    bpy.ops.mesh.primitive_cone_add(location=loc, rotation=rot, scale=scale)
+    bpy.ops.mesh.primitive_cone_add(location=loc, rotation=rot)
 elif primitive == "TORUS":
-    bpy.ops.mesh.primitive_torus_add(location=loc, rotation=rot, scale=scale)
+    bpy.ops.mesh.primitive_torus_add(location=loc, rotation=rot)
 else:
     raise ValueError(f"Unsupported primitive: {primitive}")
 
 obj = bpy.context.active_object
+obj.scale = scale
 if name:
     obj.name = name
 bpy.ops.wm.save_as_mainfile(filepath=target)
@@ -660,6 +683,47 @@ emit({"ok": True, "deleted": name, "output": target, "changed": True})
 """
     )
     return _run(script, blend_file=project, params=payload, timeout=60)
+
+
+def _scene_object_delete_all(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    output = _target_path(project, params.get("output"))
+    payload = {"output": output}
+    script = _script(
+        """
+import bpy
+count = len(bpy.data.objects)
+for obj in list(bpy.data.objects):
+    bpy.data.objects.remove(obj, do_unlink=True)
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "deleted": count, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=60)
+
+
+def _scene_object_material_list(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    script = _script(
+        """
+import bpy
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+materials = []
+for idx, slot in enumerate(obj.material_slots):
+    mat = slot.material
+    materials.append({
+        "index": idx,
+        "name": mat.name if mat else None
+    })
+emit({"ok": True, "object": obj.name, "materials": materials})
+"""
+    )
+    return _run(script, blend_file=project, params={"object_name": object_name}, timeout=60)
 
 
 def _scene_object_duplicate(params: Dict[str, Any]) -> Dict[str, Any]:
@@ -2367,6 +2431,49 @@ emit({"ok": True, "object": obj.name, "mergeDistance": float(params["merge_dista
     return _run(script, blend_file=project, params=payload, timeout=120)
 
 
+def _scene_mesh_set_vertex_positions(params: Dict[str, Any]) -> Dict[str, Any]:
+    project = str(_require_file(str(params["project"])))
+    object_name = str(params["object_name"])
+    positions = params["positions"]  # list of [index, [x, y, z]]
+    output = _target_path(project, params.get("output"))
+    payload = {
+        "object_name": object_name,
+        "positions": positions,
+        "output": output,
+    }
+    script = _script(
+        """
+import bpy
+import bmesh
+import json
+obj = bpy.data.objects.get(params["object_name"])
+if not obj:
+    raise ValueError(f"Object not found: {params['object_name']}")
+if obj.type != "MESH":
+    raise ValueError(f"Object is not a mesh: {obj.name}")
+positions = params["positions"]
+bm = bmesh.new()
+bm.from_mesh(obj.data)
+bm.verts.ensure_lookup_table()
+moved = 0
+for entry in positions:
+    idx = int(entry[0])
+    pos = entry[1]
+    if idx < len(bm.verts):
+        bm.verts[idx].co.x = float(pos[0])
+        bm.verts[idx].co.y = float(pos[1])
+        bm.verts[idx].co.z = float(pos[2])
+        moved += 1
+bm.to_mesh(obj.data)
+bm.free()
+obj.data.update()
+bpy.ops.wm.save_as_mainfile(filepath=params["output"])
+emit({"ok": True, "object": obj.name, "moved": moved, "output": params["output"], "changed": True})
+"""
+    )
+    return _run(script, blend_file=project, params=payload, timeout=120)
+
+
 def _scene_lattice_add(params: Dict[str, Any]) -> Dict[str, Any]:
     project = str(_require_file(str(params["project"])))
     name = str(params.get("name") or "Lattice")
@@ -3256,14 +3363,18 @@ if scene.camera is None:
     raise ValueError("Cannot render still: no camera in scene")
 
 scene.render.filepath = params["output_image"]
-bpy.ops.render.render(write_still=True)
 out_path = bpy.path.abspath(params["output_image"])
+before_exists = os.path.exists(out_path)
+before_mtime = os.path.getmtime(out_path) if before_exists else None
+bpy.ops.render.render(write_still=True)
 render_result = bpy.data.images.get("Render Result")
 if render_result and not os.path.exists(out_path):
     render_result.save_render(filepath=out_path, scene=scene)
 if not os.path.exists(out_path):
     raise ValueError(f"Render output missing: {out_path}")
-emit({"ok": True, "outputImage": params["output_image"], "changed": False})
+after_mtime = os.path.getmtime(out_path)
+changed = (not before_exists) or (before_mtime is not None and after_mtime > before_mtime)
+emit({"ok": True, "outputImage": params["output_image"], "changed": bool(changed)})
 """
     )
     return _run(script, blend_file=project, params=payload, timeout=600)
@@ -3399,6 +3510,7 @@ def execute(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "system.health": _system_health,
         "system.version": _system_version,
         "system.actions": _system_actions,
+        "system.capabilities": _system_capabilities,
         "system.doctor": _system_doctor,
         "project.new": _project_new,
         "project.copy": _project_copy,
@@ -3412,6 +3524,8 @@ def execute(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "scene.object.add": _scene_object_add,
         "scene.object.transform": _scene_object_transform,
         "scene.object.delete": _scene_object_delete,
+        "scene.object.delete_all": _scene_object_delete_all,
+        "scene.object.material_list": _scene_object_material_list,
         "scene.object.duplicate": _scene_object_duplicate,
         "scene.object.rename": _scene_object_rename,
         "scene.object.parent": _scene_object_parent,
@@ -3468,6 +3582,7 @@ def execute(method: str, params: Dict[str, Any]) -> Dict[str, Any]:
         "scene.mesh.slide_loop": _scene_mesh_slide_loop,
         "scene.mesh.bisect": _scene_mesh_bisect,
         "scene.mesh.clean": _scene_mesh_clean,
+        "scene.mesh.set_vertex_positions": _scene_mesh_set_vertex_positions,
         "scene.lattice.add": _scene_lattice_add,
         "scene.lattice.bind": _scene_lattice_bind,
         "scene.lattice.set_point": _scene_lattice_set_point,

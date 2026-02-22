@@ -12,6 +12,7 @@ import typer
 
 from harness_blender import __version__
 from harness_blender.bridge.client import BridgeClient, BridgeClientError
+from harness_blender.bridge.operations import ACTION_METHODS
 from harness_blender.bridge.protocol import ERROR_CODES, PROTOCOL_VERSION
 from harness_blender.bridge.server import run_bridge_server
 
@@ -131,6 +132,19 @@ def _bridge_pid_file() -> Path:
 
 def _bridge_url_file() -> Path:
     return _bridge_state_dir() / "bridge.url"
+
+
+def _cli_commands() -> list[str]:
+    commands: list[str] = []
+    for cmd in app.registered_commands:
+        name = getattr(cmd, "name", None)
+        if name:
+            commands.append(name)
+    for group in app.registered_groups:
+        name = getattr(group, "name", None)
+        if name:
+            commands.append(name)
+    return sorted(set(commands))
 
 
 def _resolve_plan_vars(value: Any, variables: Dict[str, Any]) -> Any:
@@ -283,6 +297,17 @@ def bridge_run_python(
 @app.command("actions")
 def actions() -> None:
     _ok("actions", _call_bridge("actions", "system.actions", {}))
+
+
+@app.command("capabilities")
+def capabilities() -> None:
+    data = {
+        "cliBinary": "harnessgg-blender",
+        "cliCommands": _cli_commands(),
+        "bridgeActions": ACTION_METHODS,
+        "harnessVersion": __version__,
+    }
+    _ok("capabilities", data)
 
 
 @app.command("run-plan")
@@ -503,7 +528,12 @@ def object_add(
     rotation_json: str = typer.Option("[0,0,0]", "--rotation-json"),
     scale_json: str = typer.Option("[1,1,1]", "--scale-json"),
     output: Optional[Path] = typer.Option(None, "--output"),
+    list_primitives: bool = typer.Option(False, "--list-primitives"),
 ) -> None:
+    if list_primitives:
+        primitives = ["CUBE", "SPHERE", "CYLINDER", "PLANE", "CONE", "TORUS"]
+        _ok("object.add", {"primitives": primitives})
+        return
     _ensure_bridge_ready("object.add")
     _ok(
         "object.add",
@@ -561,6 +591,33 @@ def object_delete(project: Path, object_name: str, output: Optional[Path] = type
             "object.delete",
             "scene.object.delete",
             {"project": str(project), "object_name": object_name, "output": str(output) if output else None},
+            timeout_seconds=60,
+        ),
+    )
+
+
+@object_app.command("delete-all")
+def object_delete_all(project: Path, output: Optional[Path] = typer.Option(None, "--output")) -> None:
+    _ensure_bridge_ready("object.delete-all")
+    _ok(
+        "object.delete-all",
+        _call_bridge(
+            "object.delete-all",
+            "scene.object.delete_all",
+            {"project": str(project), "output": str(output) if output else None},
+            timeout_seconds=60,
+        ),
+    )
+
+
+@object_app.command("material-list")
+def object_material_list(project: Path, object_name: str) -> None:
+    _ok(
+        "object.material-list",
+        _call_bridge(
+            "object.material-list",
+            "scene.object.material_list",
+            {"project": str(project), "object_name": object_name},
             timeout_seconds=60,
         ),
     )
@@ -1098,6 +1155,34 @@ def camera_look_at(
                 "camera_name": camera_name,
                 "target_object": target_object,
                 "target_location": json.loads(target_location_json) if target_location_json else None,
+                "output": str(output) if output else None,
+            },
+            timeout_seconds=60,
+        ),
+    )
+
+
+@camera_app.command("transform")
+def camera_transform(
+    project: Path,
+    camera_name: str,
+    location_json: Optional[str] = typer.Option(None, "--location-json"),
+    rotation_json: Optional[str] = typer.Option(None, "--rotation-json"),
+    scale_json: Optional[str] = typer.Option(None, "--scale-json"),
+    output: Optional[Path] = typer.Option(None, "--output"),
+) -> None:
+    _ensure_bridge_ready("camera.transform")
+    _ok(
+        "camera.transform",
+        _call_bridge(
+            "camera.transform",
+            "scene.object.transform",
+            {
+                "project": str(project),
+                "object_name": camera_name,
+                "location": json.loads(location_json) if location_json is not None else None,
+                "rotation": json.loads(rotation_json) if rotation_json is not None else None,
+                "scale": json.loads(scale_json) if scale_json is not None else None,
                 "output": str(output) if output else None,
             },
             timeout_seconds=60,
@@ -1802,6 +1887,30 @@ def mesh_clean(
                 "object_name": object_name,
                 "merge_distance": merge_distance,
                 "dissolve_angle": dissolve_angle,
+                "output": str(output) if output else None,
+            },
+            timeout_seconds=120,
+        ),
+    )
+
+
+@mesh_app.command("set-vertex-positions")
+def mesh_set_vertex_positions(
+    project: Path,
+    object_name: str,
+    positions_json: str = typer.Option(..., "--positions-json", help='JSON list of [index, [x,y,z]] pairs, e.g. \'[[0,[1,0,-1]],[1,[1,0,1]]]\''),
+    output: Optional[Path] = typer.Option(None, "--output"),
+) -> None:
+    _ensure_bridge_ready("mesh.set-vertex-positions")
+    _ok(
+        "mesh.set-vertex-positions",
+        _call_bridge(
+            "mesh.set-vertex-positions",
+            "scene.mesh.set_vertex_positions",
+            {
+                "project": str(project),
+                "object_name": object_name,
+                "positions": json.loads(positions_json),
                 "output": str(output) if output else None,
             },
             timeout_seconds=120,

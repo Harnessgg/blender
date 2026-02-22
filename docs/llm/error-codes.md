@@ -9,5 +9,5 @@
 Retry guidance:
 - Retry only on `BRIDGE_UNAVAILABLE`.
 - Recommended backoff: `0.5s`, `1s`, `2s`.
-- Re-check bridge with `harness-blender bridge status` before retrying mutating commands.
+- Re-check bridge with `harnessgg-blender bridge status` before retrying mutating commands.
 

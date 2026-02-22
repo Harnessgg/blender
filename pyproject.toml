@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "harnessgg-blender"
-version = "0.2.0"
+version = "0.3.0"
 description = "Bridge-first CLI for Blender automation"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -33,7 +33,7 @@ dev = [
 ]
 
 [project.scripts]
-harness-blender = "harness_blender.cli.main:main"
+harnessgg-blender = "harness_blender.cli.main:main"
 
 [project.urls]
 Homepage = "https://github.com/harnessgg/harness-blender"

@@ -7,7 +7,7 @@ import pytest
 
 
 def _run(*args: str) -> subprocess.CompletedProcess[str]:
-    return subprocess.run(["harness-blender", *args], capture_output=True, text=True, check=False)
+    return subprocess.run(["harnessgg-blender", *args], capture_output=True, text=True, check=False)
 
 
 def _require_integration() -> None:
